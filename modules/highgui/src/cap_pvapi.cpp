@@ -95,10 +95,6 @@ protected:
     virtual void Sleep(unsigned int time);
 #endif
 
-    void stopCapture();
-    bool startCapture();
-    bool resizeCaptureFrame (int frameWidth, int frameHeight);
-
     typedef struct
     {
         unsigned long   UID;
@@ -117,8 +113,6 @@ protected:
 CvCaptureCAM_PvAPI::CvCaptureCAM_PvAPI()
 {
     monocrome=false;
-    frame = NULL;
-    grayframe = NULL;
     memset(&this->Camera, 0, sizeof(this->Camera));
 }
 
@@ -138,7 +132,8 @@ void CvCaptureCAM_PvAPI::Sleep(unsigned int time)
 void CvCaptureCAM_PvAPI::close()
 {
     // Stop the acquisition & free the camera
-    stopCapture();
+    PvCommandRun(Camera.Handle, "AcquisitionStop");
+    PvCaptureEnd(Camera.Handle);
     PvCameraClose(Camera.Handle);
     PvUnInitialize();
 }
@@ -186,38 +181,73 @@ bool CvCaptureCAM_PvAPI::open( int index )
 
     if (PvCameraOpen(Camera.UID, ePvAccessMaster, &(Camera.Handle))==ePvErrSuccess)
     {
-        tPvUint32 frameWidth, frameHeight;
+
+        //Set Pixel Format to BRG24 to follow conventions
+        /*Errcode = PvAttrEnumSet(Camera.Handle, "PixelFormat", "Bgr24");
+        if (Errcode != ePvErrSuccess)
+        {
+            fprintf(stderr, "PvAPI: couldn't set PixelFormat to Bgr24\n");
+            return NULL;
+        }
+        */
+        tPvUint32 frameWidth, frameHeight, frameSize;
         unsigned long maxSize;
-
-    	// By Default, set the pixel format to Mono8.  This can be changed later
-    	// via calls to setProperty. Some colour cameras (i.e. the Manta line) have a default
-    	// image mode of Bayer8.
-
-    	if (PvAttrEnumSet(Camera.Handle, "PixelFormat", "Mono8") != ePvErrSuccess) {
-    		fprintf (stderr, "ERROR:  Cannot set default pixel format to Mono8\n");
-    		close();
-    		return false;
-    	}
-
-    	monocrome = true;
-
+        char pixelFormat[256];
+        PvAttrUint32Get(Camera.Handle, "TotalBytesPerFrame", &frameSize);
         PvAttrUint32Get(Camera.Handle, "Width", &frameWidth);
         PvAttrUint32Get(Camera.Handle, "Height", &frameHeight);
-
-        // Determine the maximum packet size supported by the system (ethernet adapter)
-        // and then configure the camera to use this value.  If the system's NIC only supports
-        // an MTU of 1500 or lower, this will automatically configure an MTU of 1500.
-        // 8228 is the optimal size described by the API in order to enable jumbo frames
-
+        PvAttrEnumGet(Camera.Handle, "PixelFormat", pixelFormat,256,NULL);
         maxSize = 8228;
         //PvAttrUint32Get(Camera.Handle,"PacketSize",&maxSize);
         if (PvCaptureAdjustPacketSize(Camera.Handle,maxSize)!=ePvErrSuccess)
             return false;
+        if (strcmp(pixelFormat, "Mono8")==0) {
+                grayframe = cvCreateImage(cvSize((int)frameWidth, (int)frameHeight), IPL_DEPTH_8U, 1);
+                grayframe->widthStep = (int)frameWidth;
+                frame = cvCreateImage(cvSize((int)frameWidth, (int)frameHeight), IPL_DEPTH_8U, 3);
+                frame->widthStep = (int)frameWidth*3;
+                Camera.Frame.ImageBufferSize = frameSize;
+                Camera.Frame.ImageBuffer = grayframe->imageData;
+        }
+        else if (strcmp(pixelFormat, "Mono16")==0) {
+                grayframe = cvCreateImage(cvSize((int)frameWidth, (int)frameHeight), IPL_DEPTH_16U, 1);
+                grayframe->widthStep = (int)frameWidth;
+                frame = cvCreateImage(cvSize((int)frameWidth, (int)frameHeight), IPL_DEPTH_16U, 3);
+                frame->widthStep = (int)frameWidth*3;
+                Camera.Frame.ImageBufferSize = frameSize;
+                Camera.Frame.ImageBuffer = grayframe->imageData;
+        }
+        else if (strcmp(pixelFormat, "Bgr24")==0) {
+                frame = cvCreateImage(cvSize((int)frameWidth, (int)frameHeight), IPL_DEPTH_8U, 3);
+                frame->widthStep = (int)frameWidth*3;
+                Camera.Frame.ImageBufferSize = frameSize;
+                Camera.Frame.ImageBuffer = frame->imageData;
+        }
+        else
+                return false;
+        // Start the camera
+        PvCaptureStart(Camera.Handle);
 
-        resizeCaptureFrame(frameWidth, frameHeight);
+        // Set the camera to capture continuously
+        if(PvAttrEnumSet(Camera.Handle, "AcquisitionMode", "Continuous")!= ePvErrSuccess)
+        {
+            fprintf(stderr,"Could not set Prosilica Acquisition Mode\n");
+            return false;
+        }
 
-        return startCapture();
+        if(PvCommandRun(Camera.Handle, "AcquisitionStart")!= ePvErrSuccess)
+        {
+            fprintf(stderr,"Could not start Prosilica acquisition\n");
+            return false;
+        }
 
+        if(PvAttrEnumSet(Camera.Handle, "FrameStartTriggerMode", "Freerun")!= ePvErrSuccess)
+        {
+            fprintf(stderr,"Error setting Prosilica trigger to \"Freerun\"");
+            return false;
+        }
+
+        return true;
     }
     fprintf(stderr,"Error cannot open camera\n");
     return false;
@@ -277,9 +307,6 @@ double CvCaptureCAM_PvAPI::getProperty( int property_id )
         sscanf(mIp, "%d.%d.%d.%d", &a, &b, &c, &d); ip = ((a*256 + b)*256 + c)*256 + d;
         return (double)ip;
     }
-    case CV_CAP_PROP_GAIN:
-    	PvAttrUint32Get(Camera.Handle, "GainValue", &nTemp);
-    	return (double)nTemp;
     }
     return -1.0;
 }
@@ -288,41 +315,14 @@ bool CvCaptureCAM_PvAPI::setProperty( int property_id, double value )
 {
     switch ( property_id )
     {
+    /*  TODO: Camera works, but IplImage must be modified for the new size
     case CV_CAP_PROP_FRAME_WIDTH:
-    {
-    	tPvUint32 currHeight;
-
-    	PvAttrUint32Get(Camera.Handle, "Height", &currHeight);
-
-    	stopCapture();
-    	// Reallocate Frames
-    	if (!resizeCaptureFrame(value, currHeight)) {
-    		startCapture();
-    		return false;
-    	}
-
-    	startCapture();
-
+        PvAttrUint32Set(Camera.Handle, "Width", (tPvUint32)value);
         break;
-    }
     case CV_CAP_PROP_FRAME_HEIGHT:
-    {
-    	tPvUint32 currWidth;
-
-    	PvAttrUint32Get(Camera.Handle, "Width", &currWidth);
-
-    	stopCapture();
-
-    	// Reallocate Frames
-    	if (!resizeCaptureFrame(value, currWidth)) {
-    		startCapture();
-    		return false;
-    	}
-
-    	startCapture();
-
+        PvAttrUint32Set(Camera.Handle, "Heigth", (tPvUint32)value);
         break;
-    }
+    */
     case CV_CAP_PROP_MONOCROME:
         if (value==1) {
             char pixelFormat[256];
@@ -357,130 +357,12 @@ bool CvCaptureCAM_PvAPI::setProperty( int property_id, double value )
         else
             return false;
         }
-    case CV_CAP_PROP_GAIN:
-    	if (PvAttrUint32Set(Camera.Handle,"GainValue",(tPvUint32)value)!=ePvErrSuccess)
-    	{
-    		return false;
-    	}
-    	break;
     default:
         return false;
     }
     return true;
 }
 
-void CvCaptureCAM_PvAPI::stopCapture()
-{
-	PvCommandRun(Camera.Handle, "AcquisitionStop");
-    PvCaptureEnd(Camera.Handle);
-}
-
-bool CvCaptureCAM_PvAPI::startCapture()
-{
-    // Start the camera
-    PvCaptureStart(Camera.Handle);
-
-    // Set the camera to capture continuously
-    if(PvAttrEnumSet(Camera.Handle, "AcquisitionMode", "Continuous")!= ePvErrSuccess)
-    {
-        fprintf(stderr,"Could not set PvAPI Acquisition Mode\n");
-        return false;
-    }
-
-    if(PvCommandRun(Camera.Handle, "AcquisitionStart")!= ePvErrSuccess)
-    {
-        fprintf(stderr,"Could not start PvAPI acquisition\n");
-        return false;
-    }
-
-    if(PvAttrEnumSet(Camera.Handle, "FrameStartTriggerMode", "Freerun")!= ePvErrSuccess)
-    {
-        fprintf(stderr,"Error setting PvAPI trigger to \"Freerun\"");
-        return false;
-    }
-
-    return true;
-}
-
-bool CvCaptureCAM_PvAPI::resizeCaptureFrame (int frameWidth, int frameHeight)
-{
-    char pixelFormat[256];
-    tPvUint32 frameSize;
-    tPvUint32 sensorHeight;
-    tPvUint32 sensorWidth;
-
-
-    if (grayframe)
-    {
-    	cvReleaseImage(&grayframe);
-    	grayframe = NULL;
-    }
-
-    if (frame)
-    {
-		cvReleaseImage(&frame);
-		frame = NULL;
-	}
-
-    if (PvAttrUint32Get(Camera.Handle, "SensorWidth", &sensorWidth) != ePvErrSuccess) {
-    	return false;
-    }
-
-    if (PvAttrUint32Get(Camera.Handle, "SensorHeight", &sensorHeight) != ePvErrSuccess) {
-    	return false;
-    }
-
-    // Cap out of bounds widths to the max supported by the sensor
-    if ((frameWidth < 0) || ((tPvUint32)frameWidth > sensorWidth)) {
-    	frameWidth = sensorWidth;
-    }
-
-    if ((frameHeight < 0) || ((tPvUint32)frameHeight > sensorHeight)) {
-    	frameHeight = sensorHeight;
-    }
-
-
-    if (PvAttrUint32Set(Camera.Handle, "Height", frameHeight) != ePvErrSuccess)
-    {
-    	return false;
-    }
-
-    if (PvAttrUint32Set(Camera.Handle, "Width", frameWidth) != ePvErrSuccess)
-    {
-    	return false;
-    }
-
-    PvAttrEnumGet(Camera.Handle, "PixelFormat", pixelFormat,256,NULL);
-    PvAttrUint32Get(Camera.Handle, "TotalBytesPerFrame", &frameSize);
-
-
-    if (strcmp(pixelFormat, "Mono8")==0) {
-            grayframe = cvCreateImage(cvSize((int)frameWidth, (int)frameHeight), IPL_DEPTH_8U, 1);
-            grayframe->widthStep = (int)frameWidth;
-            frame = cvCreateImage(cvSize((int)frameWidth, (int)frameHeight), IPL_DEPTH_8U, 3);
-            frame->widthStep = (int)frameWidth*3;
-            Camera.Frame.ImageBufferSize = frameSize;
-            Camera.Frame.ImageBuffer = grayframe->imageData;
-    }
-    else if (strcmp(pixelFormat, "Mono16")==0) {
-            grayframe = cvCreateImage(cvSize((int)frameWidth, (int)frameHeight), IPL_DEPTH_16U, 1);
-            grayframe->widthStep = (int)frameWidth;
-            frame = cvCreateImage(cvSize((int)frameWidth, (int)frameHeight), IPL_DEPTH_16U, 3);
-            frame->widthStep = (int)frameWidth*3;
-            Camera.Frame.ImageBufferSize = frameSize;
-            Camera.Frame.ImageBuffer = grayframe->imageData;
-    }
-    else if (strcmp(pixelFormat, "Bgr24")==0) {
-            frame = cvCreateImage(cvSize((int)frameWidth, (int)frameHeight), IPL_DEPTH_8U, 3);
-            frame->widthStep = (int)frameWidth*3;
-            Camera.Frame.ImageBufferSize = frameSize;
-            Camera.Frame.ImageBuffer = frame->imageData;
-    }
-    else
-            return false;
-
-    return true;
-}
 
 CvCapture* cvCreateCameraCapture_PvAPI( int index )
 {
