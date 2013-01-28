@@ -91,7 +91,7 @@ class SparseMat;
 typedef Mat MatND;
 
 class GlBuffer;
-class GlTexture;
+class GlTexture2D;
 class GlArrays;
 class GlCamera;
 
@@ -109,12 +109,7 @@ template<typename _Tp> class CV_EXPORTS MatIterator_;
 template<typename _Tp> class CV_EXPORTS MatConstIterator_;
 template<typename _Tp> class CV_EXPORTS MatCommaInitializer_;
 
-#if !defined(ANDROID) || (defined(_GLIBCXX_USE_WCHAR_T) && _GLIBCXX_USE_WCHAR_T)
-typedef std::basic_string<wchar_t> WString;
-
-CV_EXPORTS string fromUtf16(const WString& str);
-CV_EXPORTS WString toUtf16(const string& str);
-#endif
+template<typename _Tp, size_t fixed_size = 1024/sizeof(_Tp)+8> class CV_EXPORTS AutoBuffer;
 
 CV_EXPORTS string format( const char* fmt, ... );
 CV_EXPORTS string tempfile( const char* suffix CV_DEFAULT(0));
@@ -1288,6 +1283,9 @@ public:
     int* refcount; //< the associated reference counter
 };
 
+template<class T, class U> bool operator==(Ptr<T> const & a, Ptr<U> const & b);
+template<class T, class U> bool operator!=(Ptr<T> const & a, Ptr<U> const & b);
+
 
 //////////////////////// Input/Output Array Arguments /////////////////////////////////
 
@@ -1311,7 +1309,7 @@ public:
         STD_VECTOR_MAT    = 5 << KIND_SHIFT,
         EXPR              = 6 << KIND_SHIFT,
         OPENGL_BUFFER     = 7 << KIND_SHIFT,
-        OPENGL_TEXTURE    = 8 << KIND_SHIFT,
+        OPENGL_TEXTURE2D    = 8 << KIND_SHIFT,
         GPU_MAT           = 9 << KIND_SHIFT
     };
     _InputArray();
@@ -1328,13 +1326,13 @@ public:
     _InputArray(const Scalar& s);
     _InputArray(const double& val);
     _InputArray(const GlBuffer& buf);
-    _InputArray(const GlTexture& tex);
+    _InputArray(const GlTexture2D& tex);
     _InputArray(const gpu::GpuMat& d_mat);
 
     virtual Mat getMat(int i=-1) const;
     virtual void getMatVector(vector<Mat>& mv) const;
     virtual GlBuffer getGlBuffer() const;
-    virtual GlTexture getGlTexture() const;
+    virtual GlTexture2D getGlTexture2D() const;
     virtual gpu::GpuMat getGpuMat() const;
 
     virtual int kind() const;
@@ -1345,7 +1343,7 @@ public:
     virtual int channels(int i=-1) const;
     virtual bool empty() const;
 
-    /*virtual*/ ~_InputArray();
+    virtual ~_InputArray();
 
     int flags;
     void* obj;
@@ -1385,6 +1383,8 @@ public:
     template<typename _Tp, int m, int n> _OutputArray(Matx<_Tp, m, n>& matx);
     template<typename _Tp> _OutputArray(_Tp* vec, int n);
     _OutputArray(gpu::GpuMat& d_mat);
+    _OutputArray(GlBuffer& buf);
+    _OutputArray(GlTexture2D& tex);
 
     _OutputArray(const Mat& m);
     template<typename _Tp> _OutputArray(const vector<_Tp>& vec);
@@ -1395,19 +1395,23 @@ public:
     template<typename _Tp, int m, int n> _OutputArray(const Matx<_Tp, m, n>& matx);
     template<typename _Tp> _OutputArray(const _Tp* vec, int n);
     _OutputArray(const gpu::GpuMat& d_mat);
+    _OutputArray(const GlBuffer& buf);
+    _OutputArray(const GlTexture2D& tex);
 
     virtual bool fixedSize() const;
     virtual bool fixedType() const;
     virtual bool needed() const;
     virtual Mat& getMatRef(int i=-1) const;
     virtual gpu::GpuMat& getGpuMatRef() const;
+    virtual GlBuffer& getGlBufferRef() const;
+    virtual GlTexture2D& getGlTexture2DRef() const;
     virtual void create(Size sz, int type, int i=-1, bool allowTransposed=false, int fixedDepthMask=0) const;
     virtual void create(int rows, int cols, int type, int i=-1, bool allowTransposed=false, int fixedDepthMask=0) const;
     virtual void create(int dims, const int* size, int type, int i=-1, bool allowTransposed=false, int fixedDepthMask=0) const;
     virtual void release() const;
     virtual void clear() const;
 
-    /*virtual*/ ~_OutputArray();
+    virtual ~_OutputArray();
 };
 
 typedef const _InputArray& InputArray;
@@ -2059,7 +2063,8 @@ CV_EXPORTS void swap(Mat& a, Mat& b);
 
 //! converts array (CvMat or IplImage) to cv::Mat
 CV_EXPORTS Mat cvarrToMat(const CvArr* arr, bool copyData=false,
-                          bool allowND=true, int coiMode=0);
+                          bool allowND=true, int coiMode=0,
+                          AutoBuffer<double>* buf=0);
 //! extracts Channel of Interest from CvMat or IplImage and makes cv::Mat out of it.
 CV_EXPORTS void extractImageCOI(const CvArr* arr, OutputArray coiimg, int coi=-1);
 //! inserts single-channel cv::Mat into a multi-channel CvMat or IplImage
@@ -3079,7 +3084,7 @@ public:
  \code
  void my_func(const cv::Mat& m)
  {
-    cv::AutoBuffer<float, 1000> buf; // create automatic buffer containing 1000 floats
+    cv::AutoBuffer<float> buf; // create automatic buffer containing 1000 floats
 
     buf.allocate(m.rows); // if m.rows <= 1000, the pre-allocated buffer is used,
                           // otherwise the buffer of "m.rows" floats will be allocated
@@ -3088,16 +3093,21 @@ public:
  }
  \endcode
 */
-template<typename _Tp, size_t fixed_size=4096/sizeof(_Tp)+8> class CV_EXPORTS AutoBuffer
+template<typename _Tp, size_t fixed_size> class CV_EXPORTS AutoBuffer
 {
 public:
     typedef _Tp value_type;
-    enum { buffer_padding = (int)((16 + sizeof(_Tp) - 1)/sizeof(_Tp)) };
 
     //! the default contructor
     AutoBuffer();
     //! constructor taking the real buffer size
     AutoBuffer(size_t _size);
+
+    //! the copy constructor
+    AutoBuffer(const AutoBuffer<_Tp, fixed_size>& buf);
+    //! the assignment operator
+    AutoBuffer<_Tp, fixed_size>& operator = (const AutoBuffer<_Tp, fixed_size>& buf);
+
     //! destructor. calls deallocate()
     ~AutoBuffer();
 
@@ -3105,6 +3115,10 @@ public:
     void allocate(size_t _size);
     //! deallocates the buffer if it was dynamically allocated
     void deallocate();
+    //! resizes the buffer and preserves the content
+    void resize(size_t _size);
+	//! returns the current buffer size
+	size_t size() const;
     //! returns pointer to the real buffer, stack-allocated or head-allocated
     operator _Tp* ();
     //! returns read-only pointer to the real buffer, stack-allocated or head-allocated
@@ -3114,9 +3128,9 @@ protected:
     //! pointer to the real buffer, can point to buf if the buffer is small enough
     _Tp* ptr;
     //! size of the real buffer
-    size_t size;
+    size_t sz;
     //! pre-allocated buffer
-    _Tp buf[fixed_size+buffer_padding];
+    _Tp buf[fixed_size];
 };
 
 /////////////////////////// multi-dimensional dense matrix //////////////////////////
@@ -4311,7 +4325,6 @@ public:
     // (to distinguish between 0 and seq->total)
     int index;
 };
-
 
 class CV_EXPORTS Algorithm;
 class CV_EXPORTS AlgorithmInfo;

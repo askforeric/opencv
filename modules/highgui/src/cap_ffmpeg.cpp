@@ -86,7 +86,7 @@ private:
     {
     #if defined WIN32 || defined _WIN32
         const char* module_name = "opencv_ffmpeg"
-            CVAUX_STR(CV_MAJOR_VERSION) CVAUX_STR(CV_MINOR_VERSION) CVAUX_STR(CV_SUBMINOR_VERSION)
+            CVAUX_STR(CV_VERSION_EPOCH) CVAUX_STR(CV_VERSION_MAJOR) CVAUX_STR(CV_VERSION_MINOR)
         #if (defined _MSC_VER && defined _M_X64) || (defined __GNUC__ && defined __x86_64__)
             "_64"
         #endif
@@ -114,24 +114,18 @@ private:
             icvWriteFrame_FFMPEG_p =
                 (CvWriteFrame_Plugin)GetProcAddress(icvFFOpenCV, "cvWriteFrame_FFMPEG");
 
-#if 0
-            if( icvCreateFileCapture_FFMPEG_p != 0 &&
-                icvReleaseCapture_FFMPEG_p != 0 &&
-                icvGrabFrame_FFMPEG_p != 0 &&
-                icvRetrieveFrame_FFMPEG_p != 0 &&
-                icvSetCaptureProperty_FFMPEG_p != 0 &&
-                icvGetCaptureProperty_FFMPEG_p != 0 &&
-                icvCreateVideoWriter_FFMPEG_p != 0 &&
-                icvReleaseVideoWriter_FFMPEG_p != 0 &&
-                icvWriteFrame_FFMPEG_p != 0 )
+            if( icvCreateFileCapture_FFMPEG_p == NULL ||
+                icvReleaseCapture_FFMPEG_p == NULL ||
+                icvGrabFrame_FFMPEG_p == NULL  ||
+                icvRetrieveFrame_FFMPEG_p == NULL ||
+                icvSetCaptureProperty_FFMPEG_p == NULL ||
+                icvGetCaptureProperty_FFMPEG_p == NULL ||
+                icvCreateVideoWriter_FFMPEG_p == NULL ||
+                icvReleaseVideoWriter_FFMPEG_p == NULL ||
+                icvWriteFrame_FFMPEG_p == NULL )
             {
-                printf("Successfully initialized ffmpeg plugin!\n");
+                fprintf(stderr, "Failed to load FFMPEG plugin: module handle=%p\n", icvFFOpenCV);
             }
-            else
-            {
-                printf("Failed to load FFMPEG plugin: module handle=%p\n", icvFFOpenCV);
-            }
-#endif
         }
     #elif defined HAVE_FFMPEG
         icvCreateFileCapture_FFMPEG_p = (CvCreateFileCapture_Plugin)cvCreateFileCapture_FFMPEG;

@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <android/log.h>
+#include <cctype>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -268,7 +269,7 @@ void CameraWrapperConnector::fillListWrapperLibs(const string& folderPath, vecto
 
 std::string CameraWrapperConnector::getDefaultPathLibFolder()
 {
-    #define BIN_PACKAGE_NAME(x) "org.opencv.lib_v" CVAUX_STR(CV_MAJOR_VERSION) CVAUX_STR(CV_MINOR_VERSION) "_" x
+    #define BIN_PACKAGE_NAME(x) "org.opencv.lib_v" CVAUX_STR(CV_VERSION_EPOCH) CVAUX_STR(CV_VERSION_MAJOR) "_" x
     const char* const packageList[] = {BIN_PACKAGE_NAME("armv7a"), OPENCV_ENGINE_PACKAGE};
     for (size_t i = 0; i < sizeof(packageList)/sizeof(packageList[0]); i++)
     {
@@ -303,8 +304,8 @@ std::string CameraWrapperConnector::getPathLibFolder()
         LOGD("Library name: %s", dl_info.dli_fname);
         LOGD("Library base address: %p", dl_info.dli_fbase);
 
-    const char* libName=dl_info.dli_fname;
-    while( ((*libName)=='/') || ((*libName)=='.') )
+        const char* libName=dl_info.dli_fname;
+        while( ((*libName)=='/') || ((*libName)=='.') )
         libName++;
 
         char lineBuf[2048];
@@ -312,9 +313,9 @@ std::string CameraWrapperConnector::getPathLibFolder()
 
         if(file)
         {
-        while (fgets(lineBuf, sizeof lineBuf, file) != NULL)
-        {
-        //verify that line ends with library name
+            while (fgets(lineBuf, sizeof lineBuf, file) != NULL)
+            {
+                //verify that line ends with library name
                 int lineLength = strlen(lineBuf);
                 int libNameLength = strlen(libName);
 
@@ -327,7 +328,7 @@ std::string CameraWrapperConnector::getPathLibFolder()
 
                 if (0 != strncmp(lineBuf + lineLength - libNameLength, libName, libNameLength))
                 {
-            //the line does not contain the library name
+                //the line does not contain the library name
                     continue;
                 }
 
@@ -346,18 +347,18 @@ std::string CameraWrapperConnector::getPathLibFolder()
 
                 fclose(file);
                 return pathBegin;
-        }
-        fclose(file);
-        LOGE("Could not find library path");
+            }
+            fclose(file);
+            LOGE("Could not find library path");
         }
         else
         {
-        LOGE("Could not read /proc/self/smaps");
+            LOGE("Could not read /proc/self/smaps");
         }
     }
     else
     {
-    LOGE("Could not get library name and base address");
+        LOGE("Could not get library name and base address");
     }
 
     return string();
